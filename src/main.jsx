@@ -1,0 +1,652 @@
+import React, { useCallback, useEffect, useMemo } from 'react';
+import { createRoot } from 'react-dom/client';
+import {
+  Background,
+  Controls,
+  Handle,
+  MiniMap,
+  Position,
+  ReactFlow,
+  addEdge,
+  applyEdgeChanges,
+  applyNodeChanges,
+  MarkerType,
+} from '@xyflow/react';
+import '@xyflow/react/dist/style.css';
+import { Copy, FilePlus2, Flag, Info, Link, Plus, Tags, Trash2 } from 'lucide-react';
+import { create } from 'zustand';
+import './styles.css';
+
+const createFlow = (index) => ({
+  id: `flow-${Date.now()}-${index}`,
+  name: `Flow ${index}`,
+  nodes: [],
+  edges: [],
+});
+
+const initialFlow = createFlow(1);
+
+function encodeShareState(state) {
+  const json = JSON.stringify({
+    v: 1,
+    a: state.activeFlowId,
+    f: state.flows.map((flow) => ({
+      i: flow.id,
+      n: flow.name,
+      ns: flow.nodes,
+      es: flow.edges,
+    })),
+  });
+
+  return btoa(unescape(encodeURIComponent(json)))
+    .replace(/\+/g, '-')
+    .replace(/\//g, '_')
+    .replace(/=+$/, '');
+}
+
+function decodeShareState(value) {
+  try {
+    const base64 = value.replace(/-/g, '+').replace(/_/g, '/');
+    const padded = base64.padEnd(Math.ceil(base64.length / 4) * 4, '=');
+    const decoded = decodeURIComponent(escape(atob(padded)));
+    const parsed = JSON.parse(decoded);
+    const flows = parsed.f?.map((flow) => ({
+      id: flow.i,
+      name: flow.n,
+      nodes: flow.ns ?? [],
+      edges: flow.es ?? [],
+    }));
+
+    if (!flows?.length) return null;
+
+    return {
+      flows,
+      activeFlowId: flows.some((flow) => flow.id === parsed.a) ? parsed.a : flows[0].id,
+    };
+  } catch {
+    return null;
+  }
+}
+
+function readShareState() {
+  const params = new URLSearchParams(window.location.hash.slice(1));
+  return decodeShareState(params.get('s') ?? '');
+}
+
+const urlState = readShareState();
+
+const useEditorStore = create((set) => ({
+  flows: urlState?.flows ?? [initialFlow],
+  activeFlowId: urlState?.activeFlowId ?? initialFlow.id,
+  selectedNodeId: null,
+  selectedEdgeId: null,
+  setFlows: (updater) =>
+    set((state) => ({
+      flows: typeof updater === 'function' ? updater(state.flows) : updater,
+    })),
+  setActiveFlowId: (activeFlowId) => set({ activeFlowId }),
+  setSelectedNodeId: (selectedNodeId) => set({ selectedNodeId }),
+  setSelectedEdgeId: (selectedEdgeId) => set({ selectedEdgeId }),
+}));
+
+function StateNode({ id, data, selected }) {
+  return (
+    <div
+      className={['state-node', selected ? 'is-selected' : ''].join(' ')}
+      style={{ '--node-accent': data.color }}
+    >
+      <Handle
+        className="state-handle state-handle-target"
+        id={`${id}-left-target`}
+        position={Position.Left}
+        type="target"
+      />
+      {data.isEnd && (
+        <Handle
+          className="state-handle"
+          id={`${id}-left-source`}
+          position={Position.Left}
+          type="source"
+        />
+      )}
+      {!data.isEnd && (
+        <Handle
+          className="state-handle"
+          id={`${id}-right-source`}
+          position={Position.Right}
+          type="source"
+        />
+      )}
+
+      <div className="node-title">{data.title || 'Untitled state'}</div>
+      <div className="node-body">{data.body || 'Describe this state'}</div>
+      {!!data.tags?.length && (
+        <div className="tag-row">
+          {data.tags.map((tag) => (
+            <span key={tag}>{tag}</span>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+const nodeTypes = { stateNode: StateNode };
+
+function textToTags(value) {
+  return value
+    .split(',')
+    .map((tag) => tag.trim())
+    .filter(Boolean);
+}
+
+function App() {
+  const flows = useEditorStore((state) => state.flows);
+  const activeFlowId = useEditorStore((state) => state.activeFlowId);
+  const selectedNodeId = useEditorStore((state) => state.selectedNodeId);
+  const selectedEdgeId = useEditorStore((state) => state.selectedEdgeId);
+  const setFlows = useEditorStore((state) => state.setFlows);
+  const setActiveFlowId = useEditorStore((state) => state.setActiveFlowId);
+  const setSelectedNodeId = useEditorStore((state) => state.setSelectedNodeId);
+  const setSelectedEdgeId = useEditorStore((state) => state.setSelectedEdgeId);
+
+  const activeFlow = flows.find((flow) => flow.id === activeFlowId) ?? flows[0];
+  const nodes = activeFlow?.nodes ?? [];
+  const edges = activeFlow?.edges ?? [];
+  const selectedNode = nodes.find((node) => node.id === selectedNodeId);
+  const selectedEdge = edges.find((edge) => edge.id === selectedEdgeId);
+
+  useEffect(() => {
+    const encoded = encodeShareState({ flows, activeFlowId });
+    const nextUrl = `${window.location.pathname}${window.location.search}#s=${encoded}`;
+
+    window.history.replaceState(null, '', nextUrl);
+  }, [flows, activeFlowId]);
+
+  const updateActiveFlow = useCallback((patcher) => {
+    setFlows((current) =>
+      current.map((flow) =>
+        flow.id === activeFlowId ? { ...flow, ...patcher(flow) } : flow,
+      ),
+    );
+  }, [activeFlowId]);
+
+  const styledEdges = useMemo(
+    () =>
+      edges.map((edge) => ({
+        ...edge,
+        className: `edge-animation-${edge.animated ? edge.data?.animation || 'dash' : 'none'}`,
+        style: {
+          '--edge-speed': `${edge.data?.speed || 1.2}s`,
+        },
+        markerEnd: {
+          type: MarkerType.ArrowClosed,
+          color: '#111827',
+        },
+      })),
+    [edges],
+  );
+
+  const setNodesForActiveFlow = useCallback((updater) => {
+    updateActiveFlow((flow) => ({
+      nodes: typeof updater === 'function' ? updater(flow.nodes) : updater,
+    }));
+  }, [updateActiveFlow]);
+
+  const setEdgesForActiveFlow = useCallback((updater) => {
+    updateActiveFlow((flow) => ({
+      edges: typeof updater === 'function' ? updater(flow.edges) : updater,
+    }));
+  }, [updateActiveFlow]);
+
+  const getSourceHandle = useCallback((nodeId) => {
+    const node = nodes.find((item) => item.id === nodeId);
+    return node?.data.isEnd ? `${nodeId}-left-source` : `${nodeId}-right-source`;
+  }, [nodes]);
+
+  const getTargetHandle = useCallback((nodeId) => `${nodeId}-left-target`, []);
+
+  const onNodesChange = useCallback((changes) => {
+    setNodesForActiveFlow((current) => applyNodeChanges(changes, current));
+  }, [setNodesForActiveFlow]);
+
+  const onEdgesChange = useCallback((changes) => {
+    setEdgesForActiveFlow((current) => applyEdgeChanges(changes, current));
+  }, [nodes, setEdgesForActiveFlow]);
+
+  const onConnect = useCallback((connection) => {
+    setEdgesForActiveFlow((current) =>
+      addEdge(
+        {
+          ...connection,
+          id: `${connection.source}-${connection.target}-${Date.now()}`,
+          label: 'EVENT',
+          type: 'smoothstep',
+          animated: true,
+          sourceHandle: connection.sourceHandle ?? getSourceHandle(connection.source),
+          targetHandle: connection.targetHandle ?? getTargetHandle(connection.target),
+          data: {
+            animation: 'dash',
+            speed: 1.2,
+            originalSource: connection.source,
+            originalTarget: connection.target,
+            direction: 'forward',
+          },
+        },
+        current,
+      ),
+    );
+  }, [getSourceHandle, getTargetHandle, setEdgesForActiveFlow]);
+
+  const addFlow = () => {
+    const nextFlow = createFlow(flows.length + 1);
+    setFlows((current) => [...current, nextFlow]);
+    setActiveFlowId(nextFlow.id);
+    setSelectedNodeId(null);
+    setSelectedEdgeId(null);
+  };
+
+  const selectFlow = (flowId) => {
+    setActiveFlowId(flowId);
+    setSelectedNodeId(null);
+    setSelectedEdgeId(null);
+  };
+
+  const copyShareUrl = () => {
+    navigator.clipboard?.writeText(window.location.href);
+  };
+
+  const addNode = (template = {}) => {
+    const id = `state-${Date.now()}`;
+    const nextNode = {
+      id,
+      type: 'stateNode',
+      position: { x: 180 + nodes.length * 36, y: 160 + nodes.length * 28 },
+      data: {
+        title: template.title ?? `State ${nodes.length + 1}`,
+        body: template.body ?? 'Define this state',
+        tags: template.tags ?? [],
+        info: template.info ?? '',
+        isEnd: template.isEnd ?? false,
+        color: template.color ?? '#ffffff',
+        arrowAnimation: 'dash',
+        arrowSpeed: 1.2,
+      },
+    };
+
+    setNodesForActiveFlow((current) => [...current, nextNode]);
+    setSelectedNodeId(id);
+    setSelectedEdgeId(null);
+  };
+
+  const updateNodeData = useCallback((patch) => {
+    setNodesForActiveFlow((current) =>
+      current.map((node) =>
+        node.id === selectedNodeId
+          ? { ...node, data: { ...node.data, ...patch } }
+          : node,
+      ),
+    );
+  }, [selectedNodeId, setNodesForActiveFlow]);
+
+  const updateSelectedEdge = useCallback((patch) => {
+    setEdgesForActiveFlow((current) =>
+      current.map((edge) =>
+        edge.id === selectedEdgeId
+          ? {
+              ...edge,
+              ...patch,
+              data: { ...edge.data, ...(patch.data || {}) },
+            }
+          : edge,
+      ),
+    );
+  }, [selectedEdgeId, setEdgesForActiveFlow]);
+
+  const setSelectedEdgeDirection = (direction) => {
+    if (!selectedEdge) return;
+
+    setEdgesForActiveFlow((current) =>
+      current.map((edge) => {
+        if (edge.id !== selectedEdge.id) return edge;
+
+        const originalSource = edge.data?.originalSource ?? edge.source;
+        const originalTarget = edge.data?.originalTarget ?? edge.target;
+        const isReversed = direction === 'reverse';
+
+        return {
+          ...edge,
+          source: isReversed ? originalTarget : originalSource,
+          target: isReversed ? originalSource : originalTarget,
+          sourceHandle: isReversed
+            ? getSourceHandle(originalTarget)
+            : getSourceHandle(originalSource),
+          targetHandle: isReversed
+            ? getTargetHandle(originalSource)
+            : getTargetHandle(originalTarget),
+          data: {
+            ...edge.data,
+            originalSource,
+            originalTarget,
+            direction,
+          },
+        };
+      }),
+    );
+  };
+
+  const updateOutgoingTransitions = (patch) => {
+    if (!selectedNode) return;
+
+    updateNodeData(patch);
+    setEdgesForActiveFlow((current) =>
+      current.map((edge) =>
+        edge.source === selectedNode.id
+          ? {
+              ...edge,
+              animated: patch.arrowAnimation
+                ? patch.arrowAnimation !== 'none'
+                : edge.animated,
+              data: {
+                ...edge.data,
+                animation: patch.arrowAnimation ?? edge.data?.animation,
+                speed: patch.arrowSpeed ?? edge.data?.speed,
+              },
+            }
+          : edge,
+      ),
+    );
+  };
+
+  const deleteSelectedNode = () => {
+    if (!selectedNode) return;
+
+    setNodesForActiveFlow((current) =>
+      current.filter((node) => node.id !== selectedNode.id),
+    );
+    setEdgesForActiveFlow((current) =>
+      current.filter(
+        (edge) => edge.source !== selectedNode.id && edge.target !== selectedNode.id,
+      ),
+    );
+    setSelectedNodeId(null);
+  };
+
+  return (
+    <main className="app-shell">
+      <header className="topbar">
+        <div className="brand">State Machines</div>
+        <nav className="flow-tabs" aria-label="Flows">
+          {flows.map((flow) => (
+            <button
+              className={flow.id === activeFlowId ? 'active' : ''}
+              key={flow.id}
+              onClick={() => selectFlow(flow.id)}
+            >
+              {flow.name}
+            </button>
+          ))}
+          <button className="icon-button" onClick={addFlow} aria-label="Create flow">
+            <FilePlus2 size={15} />
+          </button>
+        </nav>
+        <button className="share-button" onClick={copyShareUrl}>
+          <Link size={14} /> Copy share URL
+        </button>
+      </header>
+
+      <section className="editor-grid">
+        <aside className="side-panel left-panel">
+          <div className="panel-heading">
+            <span>Add nodes</span>
+          </div>
+          <button className="node-template" onClick={() => addNode()}>
+            <Plus size={16} />
+            <span>State node</span>
+          </button>
+          <button
+            className="node-template"
+            onClick={() =>
+              addNode({
+                title: 'Decision',
+                body: 'Branch from an event',
+                tags: ['branch'],
+                color: '#f8fafc',
+              })
+            }
+          >
+            <Copy size={16} />
+            <span>Decision state</span>
+          </button>
+          <button
+            className="node-template"
+            onClick={() =>
+              addNode({
+                title: 'End',
+                body: 'Terminal state',
+                isEnd: true,
+                tags: ['terminal'],
+                color: '#f8fafc',
+              })
+            }
+          >
+            <Flag size={16} />
+            <span>End state</span>
+          </button>
+        </aside>
+
+        <section className="canvas-wrap">
+          <ReactFlow
+            fitView
+            nodes={nodes}
+            edges={styledEdges}
+            nodeTypes={nodeTypes}
+            onConnect={onConnect}
+            onEdgesChange={onEdgesChange}
+            onNodesChange={onNodesChange}
+            onNodeClick={(_, node) => {
+              setSelectedNodeId(node.id);
+              setSelectedEdgeId(null);
+            }}
+            onEdgeClick={(_, edge) => {
+              setSelectedEdgeId(edge.id);
+              setSelectedNodeId(null);
+            }}
+            onPaneClick={() => {
+              setSelectedNodeId(null);
+              setSelectedEdgeId(null);
+            }}
+          >
+            <Background color="#d1d5db" gap={20} size={1} />
+            <MiniMap
+              maskColor="rgba(249, 250, 251, 0.78)"
+              nodeColor={(node) => node.data.color || '#ffffff'}
+              pannable
+              zoomable
+            />
+            <Controls />
+          </ReactFlow>
+          {!nodes.length && (
+            <div className="canvas-empty">
+              <strong>Empty flow</strong>
+              <span>Add a node from the left panel.</span>
+            </div>
+          )}
+        </section>
+
+        <aside className="side-panel inspector">
+          <div className="panel-heading">
+            <span>Properties</span>
+          </div>
+
+          {selectedNode && (
+            <div className="panel-stack">
+              <label>
+                <span>Text</span>
+                <input
+                  value={selectedNode.data.title}
+                  onChange={(event) => updateNodeData({ title: event.target.value })}
+                />
+              </label>
+              <label>
+                <span>Description</span>
+                <textarea
+                  rows="3"
+                  value={selectedNode.data.body}
+                  onChange={(event) => updateNodeData({ body: event.target.value })}
+                />
+              </label>
+              <label>
+                <span><Info size={13} /> Additional info</span>
+                <textarea
+                  rows="4"
+                  value={selectedNode.data.info}
+                  onChange={(event) => updateNodeData({ info: event.target.value })}
+                />
+              </label>
+              <label>
+                <span><Tags size={13} /> Tags</span>
+                <input
+                  value={(selectedNode.data.tags || []).join(', ')}
+                  onChange={(event) => updateNodeData({ tags: textToTags(event.target.value) })}
+                />
+              </label>
+              <div className="field-grid">
+                <label>
+                  <span>Fill</span>
+                  <input
+                    className="color-input"
+                    type="color"
+                    value={selectedNode.data.color}
+                    onChange={(event) => updateNodeData({ color: event.target.value })}
+                  />
+                </label>
+                <label className="switch-row">
+                  <span>End node</span>
+                  <input
+                    type="checkbox"
+                    checked={selectedNode.data.isEnd}
+                    onChange={(event) => updateNodeData({ isEnd: event.target.checked })}
+                  />
+                </label>
+              </div>
+
+              <div className="control-group">
+                <span className="group-label">Outgoing arrows</span>
+                <select
+                  value={selectedNode.data.arrowAnimation}
+                  onChange={(event) =>
+                    updateOutgoingTransitions({ arrowAnimation: event.target.value })
+                  }
+                >
+                  <option value="dash">Dash</option>
+                  <option value="pulse">Pulse</option>
+                  <option value="glow">Glow</option>
+                  <option value="none">None</option>
+                </select>
+                <label>
+                  <span>Speed: {selectedNode.data.arrowSpeed}s</span>
+                  <input
+                    max="3"
+                    min="0.4"
+                    step="0.1"
+                    type="range"
+                    value={selectedNode.data.arrowSpeed}
+                    onChange={(event) =>
+                      updateOutgoingTransitions({ arrowSpeed: Number(event.target.value) })
+                    }
+                  />
+                </label>
+              </div>
+
+              <button className="danger-action" onClick={deleteSelectedNode}>
+                <Trash2 size={15} /> Delete
+              </button>
+            </div>
+          )}
+
+          {selectedEdge && (
+            <div className="panel-stack">
+              <label>
+                <span>Transition label</span>
+                <input
+                  value={selectedEdge.label || ''}
+                  onChange={(event) => updateSelectedEdge({ label: event.target.value })}
+                />
+              </label>
+              <div className="control-group">
+                <span className="group-label">Direction</span>
+                <div className="radio-group">
+                  <label>
+                    <input
+                      type="radio"
+                      name="edge-direction"
+                      checked={(selectedEdge.data?.direction || 'forward') === 'forward'}
+                      onChange={() => setSelectedEdgeDirection('forward')}
+                    />
+                    Forward
+                  </label>
+                  <label>
+                    <input
+                      type="radio"
+                      name="edge-direction"
+                      checked={selectedEdge.data?.direction === 'reverse'}
+                      onChange={() => setSelectedEdgeDirection('reverse')}
+                    />
+                    Reverse
+                  </label>
+                </div>
+              </div>
+              <label className="switch-row">
+                <span>Animate arrow</span>
+                <input
+                  type="checkbox"
+                  checked={selectedEdge.animated}
+                  onChange={(event) => updateSelectedEdge({ animated: event.target.checked })}
+                />
+              </label>
+              <label>
+                <span>Animation style</span>
+                <select
+                  value={selectedEdge.data?.animation || 'dash'}
+                  onChange={(event) =>
+                    updateSelectedEdge({
+                      animated: event.target.value !== 'none',
+                      data: { animation: event.target.value },
+                    })
+                  }
+                >
+                  <option value="dash">Dash</option>
+                  <option value="pulse">Pulse</option>
+                  <option value="glow">Glow</option>
+                  <option value="none">None</option>
+                </select>
+              </label>
+              <label>
+                <span>Speed: {selectedEdge.data?.speed || 1.2}s</span>
+                <input
+                  max="3"
+                  min="0.4"
+                  step="0.1"
+                  type="range"
+                  value={selectedEdge.data?.speed || 1.2}
+                  onChange={(event) =>
+                    updateSelectedEdge({ data: { speed: Number(event.target.value) } })
+                  }
+                />
+              </label>
+            </div>
+          )}
+
+          {!selectedNode && !selectedEdge && (
+            <div className="empty-state">
+              Select a node or arrow to edit its properties.
+            </div>
+          )}
+        </aside>
+      </section>
+    </main>
+  );
+}
+
+createRoot(document.getElementById('root')).render(<App />);
