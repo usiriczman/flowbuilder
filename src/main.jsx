@@ -46,15 +46,19 @@ function normalizeArrowStyle(value) {
 }
 
 function encodeShareState(state) {
+  const activeFlow =
+    state.flows.find((flow) => flow.id === state.activeFlowId) ?? state.flows[0];
   const json = JSON.stringify({
     v: 1,
-    a: state.activeFlowId,
-    f: state.flows.map((flow) => ({
-      i: flow.id,
-      n: flow.name,
-      ns: flow.nodes,
-      es: flow.edges,
-    })),
+    a: activeFlow?.id,
+    f: activeFlow
+      ? [{
+          i: activeFlow.id,
+          n: activeFlow.name,
+          ns: activeFlow.nodes,
+          es: activeFlow.edges,
+        }]
+      : [],
   });
 
   return btoa(unescape(encodeURIComponent(json)))
@@ -207,6 +211,7 @@ function DraggableEdge({
     maxEdgeLabelPosition,
     Math.max(minEdgeLabelPosition, data?.labelPosition ?? 0.5),
   );
+  const renderedLabel = typeof label === 'string' ? label.trim() : label;
 
   useLayoutEffect(() => {
     const path = pathMeasureRef.current;
@@ -281,17 +286,19 @@ function DraggableEdge({
         opacity="0"
         pointerEvents="none"
       />
-      <EdgeLabelRenderer>
-        <button
-          className="edge-label-drag"
-          onPointerDown={startLabelDrag}
-          style={{
-            transform: `translate(-50%, -50%) translate(${labelPoint.x}px, ${labelPoint.y}px)`,
-          }}
-        >
-          {label || 'EVENT'}
-        </button>
-      </EdgeLabelRenderer>
+      {renderedLabel && (
+        <EdgeLabelRenderer>
+          <button
+            className="edge-label-drag"
+            onPointerDown={startLabelDrag}
+            style={{
+              transform: `translate(-50%, -50%) translate(${labelPoint.x}px, ${labelPoint.y}px)`,
+            }}
+          >
+            {renderedLabel}
+          </button>
+        </EdgeLabelRenderer>
+      )}
     </>
   );
 }
@@ -468,7 +475,20 @@ function App() {
           : node,
       ),
     );
-  }, [selectedNodeId, setNodesForActiveFlow]);
+
+    if (patch.isEnd !== true || !selectedNodeId) return;
+
+    setEdgesForActiveFlow((current) =>
+      current.filter(
+        (edge) =>
+          !(
+            edge.source === selectedNodeId &&
+            edge.sourceHandle === `${selectedNodeId}-right-source`
+          ),
+      ),
+    );
+    setSelectedEdgeId(null);
+  }, [selectedNodeId, setEdgesForActiveFlow, setNodesForActiveFlow, setSelectedEdgeId]);
 
   const updateSelectedEdge = useCallback((patch) => {
     setEdgesForActiveFlow((current) =>
@@ -581,7 +601,7 @@ function App() {
   return (
     <main className="app-shell">
       <header className="topbar">
-        <div className="brand">State Machines</div>
+        <div className="brand">Flowbuilder</div>
         <nav className="flow-tabs" aria-label="Flows">
           {flows.map((flow) => (
             <button
