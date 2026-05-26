@@ -48,7 +48,7 @@ button {
 
 .topbar {
   display: grid;
-  grid-template-columns: 240px minmax(0, 1fr) auto;
+  grid-template-columns: 220px minmax(0, 1fr);
   align-items: center;
   border-bottom: 1px solid var(--border);
   background: var(--panel);
@@ -94,23 +94,9 @@ button {
   min-width: 42px;
 }
 
-.share-button {
-  height: 100%;
-  display: inline-flex;
-  align-items: center;
-  gap: 7px;
-  border: 0;
-  border-left: 1px solid var(--border);
-  padding: 0 14px;
-  color: var(--text);
-  background: #ffffff;
-  font-size: 12px;
-  font-weight: 600;
-}
-
 .editor-grid {
   display: grid;
-  grid-template-columns: 240px minmax(0, 1fr) 320px;
+  grid-template-columns: minmax(0, 1fr) 320px;
   min-height: 0;
 }
 
@@ -139,26 +125,10 @@ button {
   text-transform: uppercase;
 }
 
-.left-panel {
-  padding-bottom: 12px;
-}
-
-.node-template {
-  width: 100%;
+.panel-actions {
   display: flex;
-  align-items: center;
-  gap: 10px;
-  border: 0;
-  border-bottom: 1px solid #eef0f3;
-  padding: 12px 14px;
-  color: var(--text);
-  background: #ffffff;
-  font-size: 13px;
-  text-align: left;
-}
-
-.node-template:hover {
-  background: #f9fafb;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--border);
 }
 
 .canvas-wrap {
@@ -170,6 +140,40 @@ button {
     linear-gradient(rgba(17, 24, 39, 0.035) 1px, transparent 1px),
     var(--canvas);
   background-size: 40px 40px;
+}
+
+.canvas-add-button,
+.panel-share-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  border: 1px solid var(--border);
+  color: var(--text);
+  background: #ffffff;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.canvas-add-button {
+  position: absolute;
+  z-index: 10;
+  bottom: 24px;
+  left: 50%;
+  transform: translateX(-50%);
+  border-color: var(--accent);
+  padding: 10px 14px;
+  color: #ffffff;
+  background: var(--accent);
+  box-shadow: 0 8px 18px rgba(37, 99, 235, 0.24);
+}
+
+.panel-share-button {
+  width: 100%;
+  justify-content: center;
+  padding: 6px 8px;
+  font-size: 11px;
+  text-transform: none;
+  letter-spacing: 0;
 }
 
 .react-flow {
@@ -192,41 +196,22 @@ button {
   font-weight: 600;
 }
 
-.edge-animation-dash .react-flow__edge-path {
+.edge-style-dash .react-flow__edge-path {
   stroke-dasharray: 7 7;
-  animation: edge-dash var(--edge-speed) linear infinite;
 }
 
-.edge-animation-pulse .react-flow__edge-path {
-  animation: edge-pulse var(--edge-speed) ease-in-out infinite;
+.edge-style-dash.edge-dash-animated .react-flow__edge-path {
+  animation: edge-dash 1.2s linear infinite;
 }
 
-.edge-animation-glow .react-flow__edge-path {
-  filter: drop-shadow(0 0 4px rgba(37, 99, 235, 0.75));
-  animation: edge-glow var(--edge-speed) ease-in-out infinite;
-}
-
-.edge-animation-none .react-flow__edge-path {
+.edge-style-solid .react-flow__edge-path {
+  stroke-dasharray: none;
   animation: none;
 }
 
 @keyframes edge-dash {
   to {
     stroke-dashoffset: -28;
-  }
-}
-
-@keyframes edge-pulse {
-  50% {
-    stroke-width: 3.2;
-    stroke: var(--accent);
-  }
-}
-
-@keyframes edge-glow {
-  50% {
-    stroke: var(--accent);
-    filter: drop-shadow(0 0 8px rgba(37, 99, 235, 0.9));
   }
 }
 
@@ -275,7 +260,7 @@ button {
   width: 18px;
   height: 18px;
   border: 1px solid #ffffff;
-  border-radius: 0;
+  border-radius: 999px;
   background: var(--accent);
   box-shadow: 0 0 0 4px rgba(37, 99, 235, 0.16);
 }
@@ -369,6 +354,10 @@ select:focus {
   height: 16px;
 }
 
+.end-node-row {
+  grid-column: 1 / -1;
+}
+
 .radio-group {
   display: grid;
   grid-template-columns: 1fr 1fr;
@@ -435,7 +424,7 @@ select:focus {
   }
 
   .editor-grid {
-    grid-template-columns: 180px minmax(0, 1fr) 280px;
+    grid-template-columns: minmax(0, 1fr) 280px;
   }
 }
 

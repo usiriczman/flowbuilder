@@ -13,7 +13,7 @@ import {
   MarkerType,
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
-import { Copy, FilePlus2, Flag, Info, Link, Plus, Tags, Trash2 } from 'lucide-react';
+import { FilePlus2, Info, Link, Plus, Tags, Trash2 } from 'lucide-react';
 import { create } from 'zustand';
 import './styles.css';
 
@@ -25,6 +25,10 @@ const createFlow = (index) => ({
 });
 
 const initialFlow = createFlow(1);
+
+function normalizeArrowStyle(value) {
+  return value === 'solid' ? 'solid' : 'dash';
+}
 
 function encodeShareState(state) {
   const json = JSON.stringify({
@@ -173,17 +177,25 @@ function App() {
 
   const styledEdges = useMemo(
     () =>
-      edges.map((edge) => ({
-        ...edge,
-        className: `edge-animation-${edge.animated ? edge.data?.animation || 'dash' : 'none'}`,
-        style: {
-          '--edge-speed': `${edge.data?.speed || 1.2}s`,
-        },
-        markerEnd: {
-          type: MarkerType.ArrowClosed,
-          color: '#111827',
-        },
-      })),
+      edges.map((edge) => {
+        const edgeStyle = edge.data?.style || normalizeArrowStyle(edge.data?.animation);
+        const shouldAnimate = edgeStyle === 'dash' && edge.data?.animate !== false;
+
+        return {
+          ...edge,
+          animated: false,
+          className: [
+            `edge-style-${edgeStyle}`,
+            shouldAnimate ? 'edge-dash-animated' : '',
+          ].join(' '),
+          markerStart: edge.data?.direction === 'reverse'
+            ? { type: MarkerType.ArrowClosed, color: '#111827' }
+            : undefined,
+          markerEnd: edge.data?.direction === 'reverse'
+            ? undefined
+            : { type: MarkerType.ArrowClosed, color: '#111827' },
+        };
+      }),
     [edges],
   );
 
@@ -222,12 +234,11 @@ function App() {
           id: `${connection.source}-${connection.target}-${Date.now()}`,
           label: 'EVENT',
           type: 'smoothstep',
-          animated: true,
           sourceHandle: connection.sourceHandle ?? getSourceHandle(connection.source),
           targetHandle: connection.targetHandle ?? getTargetHandle(connection.target),
           data: {
-            animation: 'dash',
-            speed: 1.2,
+            style: 'dash',
+            animate: true,
             originalSource: connection.source,
             originalTarget: connection.target,
             direction: 'forward',
@@ -269,8 +280,8 @@ function App() {
         info: template.info ?? '',
         isEnd: template.isEnd ?? false,
         color: template.color ?? '#ffffff',
-        arrowAnimation: 'dash',
-        arrowSpeed: 1.2,
+        arrowStyle: 'dash',
+        arrowAnimate: true,
       },
     };
 
@@ -307,31 +318,19 @@ function App() {
     if (!selectedEdge) return;
 
     setEdgesForActiveFlow((current) =>
-      current.map((edge) => {
-        if (edge.id !== selectedEdge.id) return edge;
-
-        const originalSource = edge.data?.originalSource ?? edge.source;
-        const originalTarget = edge.data?.originalTarget ?? edge.target;
-        const isReversed = direction === 'reverse';
-
-        return {
-          ...edge,
-          source: isReversed ? originalTarget : originalSource,
-          target: isReversed ? originalSource : originalTarget,
-          sourceHandle: isReversed
-            ? getSourceHandle(originalTarget)
-            : getSourceHandle(originalSource),
-          targetHandle: isReversed
-            ? getTargetHandle(originalSource)
-            : getTargetHandle(originalTarget),
-          data: {
-            ...edge.data,
-            originalSource,
-            originalTarget,
-            direction,
-          },
-        };
-      }),
+      current.map((edge) =>
+        edge.id === selectedEdge.id
+          ? {
+              ...edge,
+              data: {
+                ...edge.data,
+                originalSource: edge.data?.originalSource ?? edge.source,
+                originalTarget: edge.data?.originalTarget ?? edge.target,
+                direction,
+              },
+            }
+          : edge,
+      ),
     );
   };
 
@@ -344,13 +343,12 @@ function App() {
         edge.source === selectedNode.id
           ? {
               ...edge,
-              animated: patch.arrowAnimation
-                ? patch.arrowAnimation !== 'none'
-                : edge.animated,
               data: {
                 ...edge.data,
-                animation: patch.arrowAnimation ?? edge.data?.animation,
-                speed: patch.arrowSpeed ?? edge.data?.speed,
+                style: patch.arrowStyle ?? edge.data?.style,
+                animate: patch.arrowStyle === 'solid'
+                  ? false
+                  : patch.arrowAnimate ?? edge.data?.animate ?? true,
               },
             }
           : edge,
@@ -390,52 +388,13 @@ function App() {
             <FilePlus2 size={15} />
           </button>
         </nav>
-        <button className="share-button" onClick={copyShareUrl}>
-          <Link size={14} /> Copy share URL
-        </button>
       </header>
 
       <section className="editor-grid">
-        <aside className="side-panel left-panel">
-          <div className="panel-heading">
-            <span>Add nodes</span>
-          </div>
-          <button className="node-template" onClick={() => addNode()}>
-            <Plus size={16} />
-            <span>State node</span>
-          </button>
-          <button
-            className="node-template"
-            onClick={() =>
-              addNode({
-                title: 'Decision',
-                body: 'Branch from an event',
-                tags: ['branch'],
-                color: '#f8fafc',
-              })
-            }
-          >
-            <Copy size={16} />
-            <span>Decision state</span>
-          </button>
-          <button
-            className="node-template"
-            onClick={() =>
-              addNode({
-                title: 'End',
-                body: 'Terminal state',
-                isEnd: true,
-                tags: ['terminal'],
-                color: '#f8fafc',
-              })
-            }
-          >
-            <Flag size={16} />
-            <span>End state</span>
-          </button>
-        </aside>
-
         <section className="canvas-wrap">
+          <button className="canvas-add-button" onClick={() => addNode()}>
+            <Plus size={15} /> Add node
+          </button>
           <ReactFlow
             fitView
             nodes={nodes}
@@ -469,14 +428,19 @@ function App() {
           {!nodes.length && (
             <div className="canvas-empty">
               <strong>Empty flow</strong>
-              <span>Add a node from the left panel.</span>
+              <span>Add a node from the canvas.</span>
             </div>
           )}
         </section>
 
         <aside className="side-panel inspector">
+          <div className="panel-actions">
+            <button className="panel-share-button" onClick={copyShareUrl}>
+              <Link size={13} /> Copy share URL
+            </button>
+          </div>
           <div className="panel-heading">
-            <span>Properties</span>
+            <span>Node properties</span>
           </div>
 
           {selectedNode && (
@@ -486,6 +450,14 @@ function App() {
                 <input
                   value={selectedNode.data.title}
                   onChange={(event) => updateNodeData({ title: event.target.value })}
+                />
+              </label>
+              <label className="switch-row end-node-row">
+                <span>End node</span>
+                <input
+                  type="checkbox"
+                  checked={selectedNode.data.isEnd}
+                  onChange={(event) => updateNodeData({ isEnd: event.target.checked })}
                 />
               </label>
               <label>
@@ -521,43 +493,37 @@ function App() {
                     onChange={(event) => updateNodeData({ color: event.target.value })}
                   />
                 </label>
-                <label className="switch-row">
-                  <span>End node</span>
-                  <input
-                    type="checkbox"
-                    checked={selectedNode.data.isEnd}
-                    onChange={(event) => updateNodeData({ isEnd: event.target.checked })}
-                  />
-                </label>
               </div>
 
               <div className="control-group">
                 <span className="group-label">Outgoing arrows</span>
                 <select
-                  value={selectedNode.data.arrowAnimation}
+                  value={selectedNode.data.arrowStyle || normalizeArrowStyle(selectedNode.data.arrowAnimation)}
                   onChange={(event) =>
-                    updateOutgoingTransitions({ arrowAnimation: event.target.value })
+                    updateOutgoingTransitions({
+                      arrowStyle: event.target.value,
+                      arrowAnimate: event.target.value === 'dash'
+                        ? selectedNode.data.arrowAnimate !== false
+                        : false,
+                    })
                   }
                 >
                   <option value="dash">Dash</option>
-                  <option value="pulse">Pulse</option>
-                  <option value="glow">Glow</option>
-                  <option value="none">None</option>
+                  <option value="solid">Solid</option>
                 </select>
-                <label>
-                  <span>Speed: {selectedNode.data.arrowSpeed}s</span>
+              </div>
+              {(selectedNode.data.arrowStyle || normalizeArrowStyle(selectedNode.data.arrowAnimation)) === 'dash' && (
+                <label className="switch-row">
+                  <span>Animate dash</span>
                   <input
-                    max="3"
-                    min="0.4"
-                    step="0.1"
-                    type="range"
-                    value={selectedNode.data.arrowSpeed}
+                    type="checkbox"
+                    checked={selectedNode.data.arrowAnimate !== false}
                     onChange={(event) =>
-                      updateOutgoingTransitions({ arrowSpeed: Number(event.target.value) })
+                      updateOutgoingTransitions({ arrowAnimate: event.target.checked })
                     }
                   />
                 </label>
-              </div>
+              )}
 
               <button className="danger-action" onClick={deleteSelectedNode}>
                 <Trash2 size={15} /> Delete
@@ -597,44 +563,35 @@ function App() {
                   </label>
                 </div>
               </div>
-              <label className="switch-row">
-                <span>Animate arrow</span>
-                <input
-                  type="checkbox"
-                  checked={selectedEdge.animated}
-                  onChange={(event) => updateSelectedEdge({ animated: event.target.checked })}
-                />
-              </label>
               <label>
-                <span>Animation style</span>
+                <span>Arrow style</span>
                 <select
-                  value={selectedEdge.data?.animation || 'dash'}
+                  value={selectedEdge.data?.style || normalizeArrowStyle(selectedEdge.data?.animation)}
                   onChange={(event) =>
                     updateSelectedEdge({
-                      animated: event.target.value !== 'none',
-                      data: { animation: event.target.value },
+                      data: {
+                        style: event.target.value,
+                        animate: event.target.value === 'dash',
+                      },
                     })
                   }
                 >
                   <option value="dash">Dash</option>
-                  <option value="pulse">Pulse</option>
-                  <option value="glow">Glow</option>
-                  <option value="none">None</option>
+                  <option value="solid">Solid</option>
                 </select>
               </label>
-              <label>
-                <span>Speed: {selectedEdge.data?.speed || 1.2}s</span>
-                <input
-                  max="3"
-                  min="0.4"
-                  step="0.1"
-                  type="range"
-                  value={selectedEdge.data?.speed || 1.2}
-                  onChange={(event) =>
-                    updateSelectedEdge({ data: { speed: Number(event.target.value) } })
-                  }
-                />
-              </label>
+              {(selectedEdge.data?.style || normalizeArrowStyle(selectedEdge.data?.animation)) === 'dash' && (
+                <label className="switch-row">
+                  <span>Animate dash</span>
+                  <input
+                    type="checkbox"
+                    checked={selectedEdge.data?.animate !== false}
+                    onChange={(event) =>
+                      updateSelectedEdge({ data: { animate: event.target.checked } })
+                    }
+                  />
+                </label>
+              )}
             </div>
           )}
 
