@@ -6,7 +6,6 @@ import {
   Controls,
   EdgeLabelRenderer,
   Handle,
-  MiniMap,
   Position,
   ReactFlow,
   addEdge,
@@ -649,12 +648,6 @@ function App() {
             }}
           >
             <Background color="#d1d5db" gap={20} size={1} />
-            <MiniMap
-              maskColor="rgba(249, 250, 251, 0.78)"
-              nodeColor={(node) => node.data.color || '#ffffff'}
-              pannable
-              zoomable
-            />
             <Controls />
           </ReactFlow>
           {!nodes.length && (
