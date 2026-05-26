@@ -1,8 +1,10 @@
-import React, { useCallback, useEffect, useMemo } from 'react';
+import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import {
   Background,
+  BaseEdge,
   Controls,
+  EdgeLabelRenderer,
   Handle,
   MiniMap,
   Position,
@@ -10,7 +12,9 @@ import {
   addEdge,
   applyEdgeChanges,
   applyNodeChanges,
+  getSmoothStepPath,
   MarkerType,
+  useReactFlow,
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
 import { FilePlus2, Info, Link, Plus, Tags, Trash2 } from 'lucide-react';
@@ -25,6 +29,17 @@ const createFlow = (index) => ({
 });
 
 const initialFlow = createFlow(1);
+
+const arrowColorPresets = [
+  '#111827',
+  '#2563eb',
+  '#0f766e',
+  '#ea580c',
+  '#be123c',
+  '#7c3aed',
+];
+const minEdgeLabelPosition = 0.08;
+const maxEdgeLabelPosition = 0.92;
 
 function normalizeArrowStyle(value) {
   return value === 'solid' ? 'solid' : 'dash';
@@ -91,6 +106,21 @@ const useEditorStore = create((set) => ({
   setActiveFlowId: (activeFlowId) => set({ activeFlowId }),
   setSelectedNodeId: (selectedNodeId) => set({ selectedNodeId }),
   setSelectedEdgeId: (selectedEdgeId) => set({ selectedEdgeId }),
+  updateEdgeData: (edgeId, patch) =>
+    set((state) => ({
+      flows: state.flows.map((flow) =>
+        flow.id === state.activeFlowId
+          ? {
+              ...flow,
+              edges: flow.edges.map((edge) =>
+                edge.id === edgeId
+                  ? { ...edge, data: { ...edge.data, ...patch } }
+                  : edge,
+              ),
+            }
+          : flow,
+      ),
+    })),
 }));
 
 function StateNode({ id, data, selected }) {
@@ -144,6 +174,130 @@ function textToTags(value) {
     .filter(Boolean);
 }
 
+function DraggableEdge({
+  id,
+  sourceX,
+  sourceY,
+  targetX,
+  targetY,
+  sourcePosition,
+  targetPosition,
+  markerStart,
+  markerEnd,
+  style,
+  className,
+  label,
+  data,
+}) {
+  const updateEdgeData = useEditorStore((state) => state.updateEdgeData);
+  const setSelectedEdgeId = useEditorStore((state) => state.setSelectedEdgeId);
+  const setSelectedNodeId = useEditorStore((state) => state.setSelectedNodeId);
+  const { screenToFlowPosition } = useReactFlow();
+  const pathMeasureRef = useRef(null);
+  const [labelPoint, setLabelPoint] = useState({ x: sourceX, y: sourceY });
+  const [edgePath] = getSmoothStepPath({
+    sourceX,
+    sourceY,
+    sourcePosition,
+    targetX,
+    targetY,
+    targetPosition,
+  });
+  const labelPosition = Math.min(
+    maxEdgeLabelPosition,
+    Math.max(minEdgeLabelPosition, data?.labelPosition ?? 0.5),
+  );
+
+  useLayoutEffect(() => {
+    const path = pathMeasureRef.current;
+    if (!path) return;
+
+    const length = path.getTotalLength();
+    const point = path.getPointAtLength(length * labelPosition);
+    setLabelPoint({ x: point.x, y: point.y });
+  }, [edgePath, labelPosition]);
+
+  const startLabelDrag = (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    setSelectedEdgeId(id);
+    setSelectedNodeId(null);
+
+    const path = pathMeasureRef.current;
+    if (!path) return;
+
+    const pathLength = path.getTotalLength();
+    if (!pathLength) return;
+
+    const moveLabel = (moveEvent) => {
+      const pointer = screenToFlowPosition({
+        x: moveEvent.clientX,
+        y: moveEvent.clientY,
+      });
+      let nearestPosition = labelPosition;
+      let nearestDistance = Infinity;
+      const samples = 96;
+
+      for (let index = 0; index <= samples; index += 1) {
+        const position =
+          minEdgeLabelPosition +
+          ((maxEdgeLabelPosition - minEdgeLabelPosition) * index) / samples;
+        const point = path.getPointAtLength(pathLength * position);
+        const distance = (point.x - pointer.x) ** 2 + (point.y - pointer.y) ** 2;
+
+        if (distance < nearestDistance) {
+          nearestDistance = distance;
+          nearestPosition = position;
+        }
+      }
+
+      updateEdgeData(id, {
+        labelPosition: nearestPosition,
+      });
+    };
+
+    const stopLabelDrag = () => {
+      window.removeEventListener('pointermove', moveLabel);
+      window.removeEventListener('pointerup', stopLabelDrag);
+    };
+
+    window.addEventListener('pointermove', moveLabel);
+    window.addEventListener('pointerup', stopLabelDrag);
+  };
+
+  return (
+    <>
+      <BaseEdge
+        className={className}
+        markerEnd={markerEnd}
+        markerStart={markerStart}
+        path={edgePath}
+        style={style}
+      />
+      <path
+        ref={pathMeasureRef}
+        d={edgePath}
+        fill="none"
+        opacity="0"
+        pointerEvents="none"
+      />
+      <EdgeLabelRenderer>
+        <button
+          className="edge-label-drag"
+          onPointerDown={startLabelDrag}
+          style={{
+            transform: `translate(-50%, -50%) translate(${labelPoint.x}px, ${labelPoint.y}px)`,
+          }}
+        >
+          {label || 'EVENT'}
+        </button>
+      </EdgeLabelRenderer>
+    </>
+  );
+}
+
+const edgeTypes = { draggableEdge: DraggableEdge };
+
 function App() {
   const flows = useEditorStore((state) => state.flows);
   const activeFlowId = useEditorStore((state) => state.activeFlowId);
@@ -153,6 +307,9 @@ function App() {
   const setActiveFlowId = useEditorStore((state) => state.setActiveFlowId);
   const setSelectedNodeId = useEditorStore((state) => state.setSelectedNodeId);
   const setSelectedEdgeId = useEditorStore((state) => state.setSelectedEdgeId);
+  const [copyFeedback, setCopyFeedback] = useState(false);
+  const [addFeedback, setAddFeedback] = useState(false);
+  const [tagDraft, setTagDraft] = useState('');
 
   const activeFlow = flows.find((flow) => flow.id === activeFlowId) ?? flows[0];
   const nodes = activeFlow?.nodes ?? [];
@@ -166,6 +323,10 @@ function App() {
 
     window.history.replaceState(null, '', nextUrl);
   }, [flows, activeFlowId]);
+
+  useEffect(() => {
+    setTagDraft('');
+  }, [selectedNodeId]);
 
   const updateActiveFlow = useCallback((patcher) => {
     setFlows((current) =>
@@ -184,16 +345,20 @@ function App() {
         return {
           ...edge,
           animated: false,
+          type: 'draggableEdge',
           className: [
             `edge-style-${edgeStyle}`,
             shouldAnimate ? 'edge-dash-animated' : '',
           ].join(' '),
+          style: {
+            stroke: edge.data?.color || '#111827',
+          },
           markerStart: edge.data?.direction === 'reverse'
-            ? { type: MarkerType.ArrowClosed, color: '#111827' }
+            ? { type: MarkerType.ArrowClosed, color: edge.data?.color || '#111827' }
             : undefined,
           markerEnd: edge.data?.direction === 'reverse'
             ? undefined
-            : { type: MarkerType.ArrowClosed, color: '#111827' },
+            : { type: MarkerType.ArrowClosed, color: edge.data?.color || '#111827' },
         };
       }),
     [edges],
@@ -233,12 +398,13 @@ function App() {
           ...connection,
           id: `${connection.source}-${connection.target}-${Date.now()}`,
           label: 'EVENT',
-          type: 'smoothstep',
+          type: 'draggableEdge',
           sourceHandle: connection.sourceHandle ?? getSourceHandle(connection.source),
           targetHandle: connection.targetHandle ?? getTargetHandle(connection.target),
           data: {
             style: 'dash',
             animate: true,
+            color: '#111827',
             originalSource: connection.source,
             originalTarget: connection.target,
             direction: 'forward',
@@ -265,6 +431,8 @@ function App() {
 
   const copyShareUrl = () => {
     navigator.clipboard?.writeText(window.location.href);
+    setCopyFeedback(true);
+    window.setTimeout(() => setCopyFeedback(false), 900);
   };
 
   const addNode = (template = {}) => {
@@ -288,6 +456,8 @@ function App() {
     setNodesForActiveFlow((current) => [...current, nextNode]);
     setSelectedNodeId(id);
     setSelectedEdgeId(null);
+    setAddFeedback(true);
+    window.setTimeout(() => setAddFeedback(false), 650);
   };
 
   const updateNodeData = useCallback((patch) => {
@@ -313,6 +483,44 @@ function App() {
       ),
     );
   }, [selectedEdgeId, setEdgesForActiveFlow]);
+
+  const addTagsToSelectedNode = (value) => {
+    if (!selectedNode) return;
+
+    const nextTags = textToTags(value);
+    if (!nextTags.length) return;
+
+    updateNodeData({
+      tags: Array.from(new Set([...(selectedNode.data.tags || []), ...nextTags])),
+    });
+  };
+
+  const removeTagFromSelectedNode = (tagToRemove) => {
+    if (!selectedNode) return;
+
+    updateNodeData({
+      tags: (selectedNode.data.tags || []).filter((tag) => tag !== tagToRemove),
+    });
+  };
+
+  const updateTagDraft = (value) => {
+    if (value.includes(',')) {
+      const parts = value.split(',');
+      addTagsToSelectedNode(parts.slice(0, -1).join(','));
+      setTagDraft(parts.at(-1) ?? '');
+      return;
+    }
+
+    setTagDraft(value);
+  };
+
+  const handleTagKeyDown = (event) => {
+    if (event.key !== 'Enter') return;
+
+    event.preventDefault();
+    addTagsToSelectedNode(tagDraft);
+    setTagDraft('');
+  };
 
   const setSelectedEdgeDirection = (direction) => {
     if (!selectedEdge) return;
@@ -392,13 +600,17 @@ function App() {
 
       <section className="editor-grid">
         <section className="canvas-wrap">
-          <button className="canvas-add-button" onClick={() => addNode()}>
+          <button
+            className={['canvas-add-button', addFeedback ? 'did-add' : ''].join(' ')}
+            onClick={() => addNode()}
+          >
             <Plus size={15} /> Add node
           </button>
           <ReactFlow
             fitView
             nodes={nodes}
             edges={styledEdges}
+            edgeTypes={edgeTypes}
             nodeTypes={nodeTypes}
             onConnect={onConnect}
             onEdgesChange={onEdgesChange}
@@ -435,8 +647,11 @@ function App() {
 
         <aside className="side-panel inspector">
           <div className="panel-actions">
-            <button className="panel-share-button" onClick={copyShareUrl}>
-              <Link size={13} /> Copy share URL
+            <button
+              className={['panel-share-button', copyFeedback ? 'did-copy' : ''].join(' ')}
+              onClick={copyShareUrl}
+            >
+              <Link size={13} /> {copyFeedback ? 'Copied' : 'Copy share URL'}
             </button>
           </div>
           <div className="panel-heading">
@@ -478,10 +693,26 @@ function App() {
               </label>
               <label>
                 <span><Tags size={13} /> Tags</span>
-                <input
-                  value={(selectedNode.data.tags || []).join(', ')}
-                  onChange={(event) => updateNodeData({ tags: textToTags(event.target.value) })}
-                />
+                <div className="tag-input">
+                  {(selectedNode.data.tags || []).map((tag) => (
+                    <span className="tag-chip" key={tag}>
+                      {tag}
+                      <button
+                        aria-label={`Remove ${tag}`}
+                        onClick={() => removeTagFromSelectedNode(tag)}
+                        type="button"
+                      >
+                        x
+                      </button>
+                    </span>
+                  ))}
+                  <input
+                    placeholder="Type tag, comma or Enter"
+                    value={tagDraft}
+                    onChange={(event) => updateTagDraft(event.target.value)}
+                    onKeyDown={handleTagKeyDown}
+                  />
+                </div>
               </label>
               <div className="field-grid">
                 <label>
@@ -592,6 +823,21 @@ function App() {
                   />
                 </label>
               )}
+              <div className="control-group">
+                <span className="group-label">Arrow color</span>
+                <div className="color-presets">
+                  {arrowColorPresets.map((color) => (
+                    <button
+                      aria-label={`Set arrow color ${color}`}
+                      className={(selectedEdge.data?.color || '#111827') === color ? 'active' : ''}
+                      key={color}
+                      onClick={() => updateSelectedEdge({ data: { color } })}
+                      style={{ '--preset-color': color }}
+                      type="button"
+                    />
+                  ))}
+                </div>
+              </div>
             </div>
           )}
 
